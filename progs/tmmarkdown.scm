@@ -557,6 +557,7 @@ first empty label"
       (list 'corollary* parse-env*)
       (list 'cpp-code (code-block "c++"))
       (list 'cpp parse-verbatim)
+      (list 'date (lambda (x) (strftime "%B %d %Y" (localtime (current-time)))))
       (list 'definition (count parse-env 'env))
       (list 'definition* parse-env*)
       (list 'dfn (change-to 'strong))
