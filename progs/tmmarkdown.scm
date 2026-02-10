@@ -730,8 +730,9 @@ first empty label"
     (with-global current-counter 'default
       (with-global labels (make-ahash-table)
         (make-counters)
-         `(markdown
-           (labels ,(ahash-table->list labels))
-           ,(if (is-file? x)
-                (texmacs->markdown* (car (select x '(body document))))
-                (texmacs->markdown* x)))))))
+        (let ((body (if (is-file? x)
+                        (texmacs->markdown* (car (select x '(body document))))
+                        (texmacs->markdown* x))))
+          `(markdown
+            (labels ,(ahash-table->list labels))
+            ,body))))))
