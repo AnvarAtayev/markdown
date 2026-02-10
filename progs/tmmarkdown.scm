@@ -22,6 +22,10 @@
 ;; Counters have one parent. There are no counter groups.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; Add personal flavour detection
+(define (hugo-extensions?)
+  (== (get-preference "texmacs->markdown:flavour") "hugo"))
+
 (define counters (make-ahash-table))
 (define current-counter #f)  ; the counter which applies to a new label
 (define labels #f)
@@ -184,20 +188,89 @@ first empty label"
     ,(string-drop-right (string-capitalize (symbol->string (first x))) 1)
     ,(texmacs->markdown* (second x))))
 
+;; Hugo extension: extract dueto and emit shortcode-friendly intermediate form
+
+(define (extract-dueto body)
+  "Extract dueto from a converted document body.
+   Returns (title . cleaned-body) where title is a string/tree or #f."
+  (if (not (func? body 'document))
+      (cons #f body)
+      (let ((children (cdr body)))
+        (cond
+          ;; Case 1: (document (dueto "X") rest...)
+          ((and (nnull? children)
+                (func? (car children) 'dueto))
+           (cons (cadr (car children))
+                 (if (null? (cdr children))
+                     '(document "")
+                     `(document ,@(cdr children)))))
+          ;; Case 2: (document (concat (dueto "X") rest...) more...)
+          ((and (nnull? children)
+                (func? (car children) 'concat)
+                (nnull? (cdar children))
+                (func? (cadar children) 'dueto))
+           (let* ((first-concat (car children))
+                  (title (cadr (cadr first-concat)))
+                  (remaining (cddr first-concat))
+                  (new-first (cond
+                               ((null? remaining) "")
+                               ((null? (cdr remaining)) (car remaining))
+                               (else `(concat ,@remaining))))
+                  (rest-doc (cdr children))
+                  (new-body (cond
+                              ((and (equal? new-first "") (null? rest-doc))
+                               '(document ""))
+                              ((equal? new-first "")
+                               `(document ,@rest-doc))
+                              (else
+                               `(document ,new-first ,@rest-doc)))))
+             (cons title new-body)))
+          ;; No dueto found
+          (else (cons #f body))))))
+
+(define (make-hugo-env x type)
+  "Numbered environments for Hugo shortcode output.
+   Produces (tm-env type-string number-string title-or-#f style-string body)"
+  (let* ((env-name (symbol->string (first x)))
+         (number (counter->string current-counter))
+         (style (symbol->string type))
+         (converted (texmacs->markdown* (second x)))
+         (extracted (extract-dueto converted))
+         (title (car extracted))
+         (body (cdr extracted)))
+    `(tm-env ,env-name ,number ,title ,style ,body)))
+
+(define (make-hugo-env* x type)
+  "Unnumbered environments for Hugo shortcode output."
+  (let* ((raw-name (symbol->string (first x)))
+         (env-name (string-drop-right raw-name 1))
+         (style (symbol->string type))
+         (converted (texmacs->markdown* (second x)))
+         (extracted (extract-dueto converted))
+         (title (car extracted))
+         (body (cdr extracted)))
+    `(tm-env ,env-name #f ,title ,style ,body)))
+
 (define (parse-env x)
-  (make-env x 'std))
+  (if (hugo-extensions?) (make-hugo-env x 'std) (make-env x 'std)))
 
 (define (parse-env* x)
-  (make-env* x 'std))
+  (if (hugo-extensions?) (make-hugo-env* x 'std) (make-env* x 'std)))
 
 (define (parse-plain-env x)
-  (make-env x 'plain))
+  (if (hugo-extensions?) (make-hugo-env x 'plain) (make-env x 'plain)))
 
 (define (parse-plain-env* x)
-  (make-env* x 'plain))
+  (if (hugo-extensions?) (make-hugo-env* x 'plain) (make-env* x 'plain)))
 
 (define (parse-proof x)
-  `(std-env* "Proof" ,(texmacs->markdown* (second x))))
+  (if (hugo-extensions?)
+      (let* ((converted (texmacs->markdown* (second x)))
+             (extracted (extract-dueto converted))
+             (title (car extracted))
+             (body (cdr extracted)))
+        `(tm-env "proof" #f ,title "std" ,body))
+      `(std-env* "Proof" ,(texmacs->markdown* (second x)))))
 
 (define (make-alg x extra)
   (when (nnull? extra)
@@ -330,7 +403,8 @@ first empty label"
   "Append extra backslashes at the end of a !row in LaTeX tables"
   (if (and (func? t '!row) (list>1? t))
       (with cols (cdr t)
-        `(!row ,@(cDr cols) (!concat ,(cAr cols) "\\\\\\\\")))
+        ; `(!row ,@(cDr cols) (!concat ,(cAr cols) "\\\\\\\\")))
+        `(!row ,@(cDr cols) (!concat ,(cAr cols) "\\")))
       t))
 
 (define (md-fix-math-table t)
@@ -376,7 +450,10 @@ first empty label"
            `(!concat (label ,label) (tag ,tag)))))
      (,(cut func? <> 'ensuremath) . ,cadr)
      (,(cut func? <> '!sub) .
-       ,(lambda (x) (cons "\\_" (md-math* (cdr x)))))
+        ,(lambda (x)
+          (if (hugo-extensions?)
+            (cons "_" (md-math* (cdr x)))     ; Clean underscore for your flavour
+            (cons "\\_" (md-math* (cdr x)))))) ; Default behavior for others
      (,(cut func? <> 'label) . ,append-latex-tag )
      ; CAREFUL: this needs to happen before append-latex-tag, so it must go after
      (,(cut func? <> '!table) . ,md-fix-math-table))))
@@ -404,7 +481,9 @@ first empty label"
         `(,tag ,(md-map texmacs->markdown* (cdr x))))))
 
 (define (parse-string s)
-  (string-replace (string-replace s "_" "\\_") "*" "\\*"))
+  (if (hugo-extensions?)
+    s ; dont escape underscores for hugo
+    (string-replace (string-replace s "_" "\\_") "*" "\\*")))
 
 (define (parse-tabular x)
   ; TODO: handle different types tabular, tabular*, block*, etc.
@@ -427,6 +506,14 @@ first empty label"
 (define (parse-hugo-short x)
   `(hugo-short ,(string->symbol (tm->string (second x)))
                ,(md-map texmacs->markdown* (cddr x))))
+
+;; For Hugo: emit both summary and body for collapsible block
+;; For vanilla: keep only the main text (no folding support)
+(define (parse-folded-env x)
+  (if (hugo-extensions?)
+      `(folded ,(texmacs->markdown* (tm-ref x 0))
+               ,(texmacs->markdown* (tm-ref x 1)))
+      (texmacs->markdown* (tm-ref x 0))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Dispatch
@@ -456,6 +543,7 @@ first empty label"
       (list 'big-table* parse-table*)
       (list 'block parse-tabular)
       (list 'block* parse-tabular)  ; TODO: centered contents
+      ; (list 'choice parse-choice)
       (list 'cite-detail keep-verbatim)
       (list 'cite keep-verbatim)
       (list 'code (code-block ""))
@@ -498,6 +586,7 @@ first empty label"
       (list 'explain-macro keep)
       (list 'flag drop)
       (list 'footnote keep)
+      (list 'folded-env parse-folded-env)
       (list 'hide-preamble drop)
       (list 'hlink parse-link)
       (list 'hrule hrule-hack)

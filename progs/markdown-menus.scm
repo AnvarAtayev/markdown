@@ -82,6 +82,7 @@
   (-> "Flavour"
       ("Vanilla" (markdown-set-flavour "vanilla"))
       ("Hugo" (markdown-set-flavour "hugo")))
+      ("myhugo" (markdown-set-flavour "myhugo")))
   (-> "Export tables as"
       (when #f
         ("Markdown" (markdown-set-table-format "none")))

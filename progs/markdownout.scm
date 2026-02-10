@@ -38,6 +38,7 @@
         (when (nnull? (md-get 'refs))
           (ahash-set! front "refs" 
                       `(tuple ,@(list-remove-duplicates (md-get 'refs)))))
+        (ahash-set! front "math" "true") ; set math: true when exporting to markdown
         (string-append
          "---"
          (serialize-yaml `(dict ,@(assoc->list (ahash-table->list front))))
@@ -249,15 +250,18 @@
 
 (define (md-equation x)
   (let*  ((s1 (md-math x (md-get 'paragraph-width)))
-          (s2 (string-replace s1 "\\[" "\\\\["))
-          (s3 (string-replace s2 "\\]" "\\\\]"))
-          (s4 (string-split s3 #\newline))
-          (s5 (map escape-md-symbols s4))
-          (anchors (string-concatenate (map create-equation-link s5)))
-          (lines (if (string-null? anchors) s5 (cons anchors s5))))
+          ;; Remove any existing delimiters first
+          (s2 (string-replace s1 "\\[" ""))
+          (s3 (string-replace s2 "\\]" ""))
+          ;; Then wrap the ENTIRE content with $$
+          (s4 (string-append "$$\n" s3 "\n$$"))
+          (s5 (string-split s4 #\newline))
+          (s6 (map escape-md-symbols s5))
+          (anchors (string-concatenate (map create-equation-link s6)))
+          (lines (if (string-null? anchors) s6 (cons anchors s6))))
      (with-md-globals 'num-line-breaks 1
        (serialize-markdown* `(document ,@lines)))))
-
+       
 (define (md-numbered-equation x)
   (md-equation x))
 
@@ -353,7 +357,7 @@
 (define md-style-tag-list '(em strong tt strike underline))
 (define md-style-drop-tag-list
   '(marginal-note marginal-note* footnote footnote* label item
-    equation equation* eqnarray eqnarray* math))
+    equation equation* eqnarray eqnarray* math folded tm-env))
 (define md-stylable-tag-list '(document itemize enumerate theorem ))  ;FIXME
 
 (define (add-style-to st x)
@@ -561,6 +565,47 @@
       (md-hugo-frontmatter `(hugo-front "tags" (tuple (cdr x))))
       ""))
 
+(define (md-folded x)
+  "Hugo extension: collapsible block using details shortcode"
+  (if (hugo-extensions?)
+      (let ((summary (serialize-markdown* (second x)))
+            (body (serialize-markdown* (third x))))
+        (string-append "{{% details %}}\n"
+                       summary "\n"
+                       "<!-- split -->\n"
+                       body "\n"
+                       "{{% /details %}}"))
+      (serialize-markdown* (second x))))
+
+(define (md-tm-env x)
+  "Hugo extension: theorem-like environment as {{% env %}} shortcode.
+   Intermediate form: (tm-env type number-or-#f title-or-#f style body)"
+  (if (hugo-extensions?)
+      (let* ((env-type (second x))
+             (number (third x))
+             (title (fourth x))
+             (style (fifth x))
+             (body (sixth x))
+             (title-str (if (and title (string? title)) title
+                            (if title (serialize-markdown* title) #f)))
+             (params (string-append
+                      "type=" (string-quote env-type)
+                      (if number
+                          (string-append " number=" (string-quote number))
+                          "")
+                      (if (and title-str (not (string-null? title-str)))
+                          (string-append " title=" (string-quote title-str))
+                          "")
+                      (if (string=? style "plain")
+                          " style=\"plain\""
+                          "")))
+             (content (serialize-markdown* body)))
+        (string-append "{{% env " params " %}}\n"
+                       content "\n"
+                       "{{% /env %}}"))
+      ;; Vanilla fallback (shouldn't normally reach here)
+      (serialize-markdown* (sixth x))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; dispatch
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -602,6 +647,7 @@
       (list 'equation* md-equation)
       (list 'equation md-numbered-equation)
       (list 'explain-macro md-explain-macro)
+      (list 'folded md-folded)  ; Hugo extension (collapsible blocks)
       (list 'footnote md-footnote)
       (list 'h1 (md-header 1))
       (list 'h2 (md-header 2))
@@ -637,6 +683,7 @@
       (list 'table-of-contents md-toc) ; Hugo extension
       (list 'tabular md-tabular)
       (list 'tags md-hugo-tags)  ; Hugo extension (DEPRECATED)
+      (list 'tm-env md-tm-env)  ; Hugo extension (theorem-like environments)
       (list 'tmdoc-copyright md-tmdoc-copyright)
       (list 'todo md-todo)
       (list 'tt md-style)
