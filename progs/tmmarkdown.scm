@@ -190,6 +190,14 @@ first empty label"
 
 ;; Hugo extension: extract dueto and emit shortcode-friendly intermediate form
 
+(define (find-dueto-in-concat elems)
+  "Find a dueto node in a list of concat elements.
+   Returns (index . dueto-node) or #f."
+  (let loop ((rest elems) (i 0))
+    (cond ((null? rest) #f)
+          ((func? (car rest) 'dueto) (cons i (car rest)))
+          (else (loop (cdr rest) (+ i 1))))))
+
 (define (extract-dueto body)
   "Extract dueto from a converted document body.
    Returns (title . cleaned-body) where title is a string/tree or #f."
@@ -204,14 +212,20 @@ first empty label"
                  (if (null? (cdr children))
                      '(document "")
                      `(document ,@(cdr children)))))
-          ;; Case 2: (document (concat (dueto "X") rest...) more...)
+          ;; Case 2: (document (concat ... (dueto "X") rest...) more...)
+;; The dueto may be preceded by labels or other elements in the concat
           ((and (nnull? children)
                 (func? (car children) 'concat)
-                (nnull? (cdar children))
-                (func? (cadar children) 'dueto))
-           (let* ((first-concat (car children))
-                  (title (cadr (cadr first-concat)))
-                  (remaining (cddr first-concat))
+                (find-dueto-in-concat (cdar children)))
+           (let* ((found (find-dueto-in-concat (cdar children)))
+                  (first-concat (car children))
+           (concat-elems (cdr first-concat))
+                  (dueto-idx (car found))
+                  (dueto-node (cdr found))
+                  (title (cadr dueto-node))
+                  (before (list-head concat-elems dueto-idx))
+                  (after (list-tail concat-elems (+ dueto-idx 1)))
+                  (remaining (append before after))
                   (new-first (cond
                                ((null? remaining) "")
                                ((null? (cdr remaining)) (car remaining))
