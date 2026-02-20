@@ -358,7 +358,7 @@
 (define md-style-drop-tag-list
   '(marginal-note marginal-note* footnote footnote* label item
     equation equation* eqnarray eqnarray* math folded tm-env tm-algorithm
-    algo-block algo-indent algo-line))
+    algo-block algo-indent algo-line tm-description tm-description-item))
 (define md-stylable-tag-list '(document itemize enumerate theorem ))  ;FIXME
 
 (define (add-style-to st x)
@@ -676,6 +676,28 @@
       ;; Vanilla fallback
       (serialize-markdown* (fourth x))))
 
+(define (md-tm-description x)
+  "Hugo extension: description list as {{% description %}} shortcode.
+   Intermediate form: (tm-description (document (tm-description-item title body) ...))"
+  (let ((content (serialize-markdown* (second x))))
+    (string-append "{{% description %}}\n"
+                   content "\n"
+                   "{{% /description %}}")))
+
+(define (md-tm-description-item x)
+  "Description item. Hugo: {{% description-item %}} shortcode. Vanilla: bold label + content.
+   Intermediate form: (tm-description-item title body)"
+  (let* ((title (serialize-markdown* (second x)))
+         (body (third x))
+         (body-str (serialize-markdown* body)))
+    (if (hugo-extensions?)
+        (string-append "{{% description-item title="
+                       (string-quote title) " %}}\n"
+                       body-str "\n"
+                       "{{% /description-item %}}")
+        ;; Vanilla: **label** content
+        (string-append "**" title "** " body-str))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; dispatch
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -756,6 +778,8 @@
       (list 'table-of-contents md-toc) ; Hugo extension
       (list 'tabular md-tabular)
       (list 'tags md-hugo-tags)  ; Hugo extension (DEPRECATED)
+      (list 'tm-description md-tm-description)  ; Hugo extension (description lists)
+      (list 'tm-description-item md-tm-description-item)  ; Hugo extension (description items)
       (list 'tm-env md-tm-env)  ; Hugo extension (theorem-like environments)
       (list 'tm-algorithm md-tm-algorithm)  ; Hugo extension (algorithm environments)
       (list 'tmdoc-copyright md-tmdoc-copyright)

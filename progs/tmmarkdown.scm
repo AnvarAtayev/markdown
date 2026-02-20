@@ -442,6 +442,89 @@ first empty label"
   ;; (indent body) -> (algo-indent body)
   `(algo-indent ,(texmacs->markdown* (second x))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Description lists
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (description-item-start? x)
+  "Is @x a paragraph starting with (item* ...)?"
+  (or (func? x 'item*)
+      (and (func? x 'concat) (>= (length x) 2)
+           (func? (second x) 'item*))))
+
+(define (group-description-items children)
+  "Groups document children into (item-start continuation ...) lists.
+   Each group begins with an item* paragraph and includes following non-item paragraphs."
+  (if (null? children) '()
+      (let loop ((rest (cdr children))
+                 (current (list (car children)))
+                 (result '()))
+        (cond
+          ((null? rest)
+           (reverse (cons (reverse current) result)))
+          ((description-item-start? (car rest))
+           (loop (cdr rest)
+                 (list (car rest))
+                 (cons (reverse current) result)))
+          (else
+           (loop (cdr rest)
+                 (cons (car rest) current)
+                 result))))))
+
+(define (parse-description-group group)
+  "Converts a group (item-start-paragraph continuation ...) into a tm-description-item.
+   Merges continuation paragraphs into the item body."
+  (let* ((first (car group))
+         (continuations (cdr group)))
+    (cond
+      ;; (concat (item* label) content ...) possibly with continuations
+      ((and (func? first 'concat) (>= (length first) 2)
+            (func? (second first) 'item*))
+       (let* ((label (texmacs->markdown* (second (second first))))
+              (rest (cddr first))
+              (first-body (if (null? rest) '()
+                              (if (== (length rest) 1)
+                                  (list (texmacs->markdown* (car rest)))
+                                  (list (texmacs->markdown*
+                                         (cons 'concat rest))))))
+              (cont-bodies (map texmacs->markdown* continuations))
+              (all-bodies (append first-body cont-bodies))
+              (body (cond ((null? all-bodies) "")
+                          ((== (length all-bodies) 1) (car all-bodies))
+                          (else `(document ,@all-bodies)))))
+         `(tm-description-item ,label ,body)))
+      ;; standalone (item* label) possibly with continuations
+      ((func? first 'item*)
+       (let* ((label (texmacs->markdown* (second first)))
+              (cont-bodies (map texmacs->markdown* continuations))
+              (body (cond ((null? cont-bodies) "")
+                          ((== (length cont-bodies) 1) (car cont-bodies))
+                          (else `(document ,@cont-bodies)))))
+         `(tm-description-item ,label ,body)))
+      ;; orphan content (no item* prefix) - just convert
+      (else
+       (if (null? continuations)
+           (texmacs->markdown* first)
+           `(document ,@(map texmacs->markdown*
+                             (cons first continuations))))))))
+
+(define (parse-description x)
+  "Converts (description (document ...items...)) to intermediate form.
+   Hugo: (tm-description (document (tm-description-item title body) ...))
+   Vanilla: bold label + content as regular paragraphs."
+  (let* ((doc (second x))
+         (children (cdr doc))
+         (groups (group-description-items children))
+         (converted (map parse-description-group groups)))
+    (if (hugo-extensions?)
+        `(tm-description (document ,@converted))
+        ;; Vanilla: bold label followed by content
+        `(document ,@converted))))
+
+(define (parse-item* x)
+  "Handles standalone item* tags: (item* label) -> (strong label)"
+  `(strong ,(texmacs->markdown* (second x))))
+
 (define (parse-image x)
   (if (func? x 'md-alt-image)
       (parse-image (third x))
@@ -738,6 +821,10 @@ first empty label"
       (list 'cpp parse-verbatim)
       (list 'date (lambda (x) (strftime "%B %d %Y" (localtime (current-time)))))
       (list 'definition (count parse-env 'env))
+      (list 'description parse-description)
+      (list 'description-compact (change-to 'description))
+      (list 'description-dash (change-to 'description))
+      (list 'description-long (change-to 'description))
       (list 'definition* parse-env*)
       (list 'dfn (change-to 'strong))
       (list 'doc-author keep)
@@ -780,6 +867,7 @@ first empty label"
       (list 'itemize keep)
       (list 'itemize-minus (change-to 'itemize))
       (list 'item keep)
+      (list 'item* parse-item*)
       (list 'label parse-label)
       (list 'LaTeX (change-to "LaTeX"))
       (list 'LaTeX* (change-to "(La)TeX"))
