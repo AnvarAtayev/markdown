@@ -213,13 +213,13 @@ first empty label"
                      '(document "")
                      `(document ,@(cdr children)))))
           ;; Case 2: (document (concat ... (dueto "X") rest...) more...)
-;; The dueto may be preceded by labels or other elements in the concat
+          ;; The dueto may be preceded by labels or other elements in the concat
           ((and (nnull? children)
                 (func? (car children) 'concat)
                 (find-dueto-in-concat (cdar children)))
            (let* ((found (find-dueto-in-concat (cdar children)))
                   (first-concat (car children))
-           (concat-elems (cdr first-concat))
+                  (concat-elems (cdr first-concat))
                   (dueto-idx (car found))
                   (dueto-node (cdr found))
                   (title (cadr dueto-node))
@@ -308,6 +308,139 @@ first empty label"
 
 (define (parse-specified-alg* x)
   (make-alg `(dummy (document ,@(append (cdr (second x)) (cdr (third x))))) '()))
+
+(define (make-hugo-alg body number title)
+  "Algorithm environment for Hugo shortcode output.
+   Produces (tm-algorithm number-or-#f title-or-#f body)"
+  `(tm-algorithm ,number ,title ,body))
+
+(define (parse-hugo-alg x)
+  (make-hugo-alg (texmacs->markdown* (second x))
+                 (counter->string current-counter) #f))
+
+(define (parse-hugo-alg* x)
+  (make-hugo-alg (texmacs->markdown* (second x)) #f #f))
+
+(define (parse-hugo-named-alg x)
+  (make-hugo-alg (texmacs->markdown* (third x))
+                 (counter->string current-counter)
+                 (texmacs->markdown* (second x))))
+
+(define (parse-hugo-specified-alg x)
+  (make-hugo-alg (texmacs->markdown*
+                  `(document ,@(append (cdr (second x)) (cdr (third x)))))
+                 (counter->string current-counter) #f))
+
+(define (parse-hugo-specified-alg* x)
+  (make-hugo-alg (texmacs->markdown*
+                  `(document ,@(append (cdr (second x)) (cdr (third x)))))
+                 #f #f))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Algorithm pseudo-code constructs
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Block constructs: produce (algo-block header closing body)
+;; header: concat of keyword + condition line
+;; closing: closing keyword line or #f
+;; body: recursively converted body content
+
+(define (parse-algo-if x)
+  ;; (algo-if cond body)
+  (let ((cond-md (texmacs->markdown* (second x)))
+        (body (texmacs->markdown* (third x))))
+    `(algo-block
+      (concat (strong "if") " " ,cond-md " " (strong "then"))
+      #f ,body)))
+
+(define (parse-algo-else-if x)
+  ;; (algo-else-if cond body)
+  (let ((cond-md (texmacs->markdown* (second x)))
+        (body (texmacs->markdown* (third x))))
+    `(algo-block
+      (concat (strong "else if") " " ,cond-md " " (strong "then"))
+      #f ,body)))
+
+(define (parse-algo-else x)
+  ;; (algo-else body)
+  (let ((body (texmacs->markdown* (second x))))
+    `(algo-block (strong "else") #f ,body)))
+
+(define (parse-algo-if-else-if x)
+  ;; (algo-if-else-if child1 child2 ...) where children are algo-if/else-if/else
+  ;; Each child handles itself; this wrapper appends "end if"
+  (let ((children (md-map texmacs->markdown* (cdr x))))
+    `(document ,@children (algo-line (strong "end if")))))
+
+(define (make-algo-loop-handler keyword-before keyword-after)
+  "Handler for loop constructs: keyword cond do / body / end keyword"
+  (lambda (x)
+    (let ((cond-md (texmacs->markdown* (second x)))
+          (body (texmacs->markdown* (third x))))
+      `(algo-block
+        (concat (strong ,keyword-before) " " ,cond-md " " (strong "do"))
+        (strong ,keyword-after)
+        ,body))))
+
+(define (make-algo-simple-block keyword-before keyword-after)
+  "Handler for simple blocks: keyword / body / optional end keyword"
+  (lambda (x)
+    (let ((body (texmacs->markdown* (second x))))
+      `(algo-block (strong ,keyword-before)
+                   ,(if keyword-after `(strong ,keyword-after) #f)
+                   ,body))))
+
+(define (parse-algo-repeat x)
+  ;; (algo-repeat cond body) -> repeat / body / until cond
+  (let ((cond-md (texmacs->markdown* (second x)))
+        (body (texmacs->markdown* (third x))))
+    `(algo-block
+      (strong "repeat")
+      (concat (strong "until") " " ,cond-md)
+      ,body)))
+
+(define (make-algo-callable keyword)
+  "Handler for procedure/function: keyword Name(args) / body / end keyword"
+  (lambda (x)
+    (let ((name (texmacs->markdown* (second x)))
+          (args (texmacs->markdown* (third x)))
+          (body (texmacs->markdown* (fourth x))))
+      `(algo-block
+        (concat (strong ,keyword) " " ,name "(" ,args ")")
+        (strong ,(string-append "end " keyword))
+        ,body))))
+
+;; Inline constructs: produce (algo-line (concat keyword body))
+
+(define (parse-algo-inline keyword)
+  "Returns handler for inline keyword: bold keyword + body"
+  (lambda (x)
+    `(algo-line (concat (strong ,keyword) " " ,(texmacs->markdown* (second x))))))
+
+;; Simple keywords: produce (strong keyword)
+
+(define (parse-algo-keyword keyword)
+  "Returns handler for a simple bold keyword"
+  (lambda (x) `(strong ,keyword)))
+
+;; Special inline handlers
+
+(define (parse-algo-call x)
+  ;; (algo-call name args) -> Name(args)
+  (let ((name (texmacs->markdown* (second x)))
+        (args (texmacs->markdown* (third x))))
+    `(concat ,name "(" ,args ")")))
+
+(define (parse-algo-comment x)
+  ;; (algo-comment body) -> {body} in italic
+  (let ((body (texmacs->markdown* (second x))))
+    `(concat "{" (em ,body) "}")))
+
+;; Indent tag
+
+(define (parse-algo-indent x)
+  ;; (indent body) -> (algo-indent body)
+  `(algo-indent ,(texmacs->markdown* (second x))))
 
 (define (parse-image x)
   (if (func? x 'md-alt-image)
@@ -539,8 +672,40 @@ first empty label"
       (list 'abstract keep)
       (list 'acknowledgments (count parse-plain-env 'env))
       (list 'acknowledgments* parse-plain-env*)
-      (list 'algorithm (count parse-alg 'alg))
-      (list 'algorithm* parse-alg*)
+      (list 'algorithm (count (lambda (x) (if (hugo-extensions?) (parse-hugo-alg x) (parse-alg x))) 'alg))
+      (list 'algorithm* (lambda (x) (if (hugo-extensions?) (parse-hugo-alg* x) (parse-alg* x))))
+      (list 'algo-and (parse-algo-keyword "and"))
+      (list 'algo-begin (make-algo-simple-block "begin" #f))
+      (list 'algo-body (make-algo-simple-block "do" #f))
+      (list 'algo-call parse-algo-call)
+      (list 'algo-comment parse-algo-comment)
+      (list 'algo-data (parse-algo-inline "Data:"))
+      (list 'algo-else parse-algo-else)
+      (list 'algo-else-if parse-algo-else-if)
+      (list 'algo-ensure (parse-algo-inline "Ensure:"))
+      (list 'algo-false (parse-algo-keyword "false"))
+      (list 'algo-for (make-algo-loop-handler "for" "end for"))
+      (list 'algo-for-all (make-algo-loop-handler "for all" "end for"))
+      (list 'algo-for-each (make-algo-loop-handler "for each" "end for"))
+      (list 'algo-function (make-algo-callable "function"))
+      (list 'algo-if parse-algo-if)
+      (list 'algo-if-else-if parse-algo-if-else-if)
+      (list 'algo-inputs (make-algo-simple-block "inputs" #f))
+      (list 'algo-loop (make-algo-simple-block "loop" "end loop"))
+      (list 'algo-not (parse-algo-keyword "not"))
+      (list 'algo-or (parse-algo-keyword "or"))
+      (list 'algo-outputs (make-algo-simple-block "outputs" #f))
+      (list 'algo-print (parse-algo-inline "print"))
+      (list 'algo-procedure (make-algo-callable "procedure"))
+      (list 'algo-repeat parse-algo-repeat)
+      (list 'algo-require (parse-algo-inline "Require:"))
+      (list 'algo-result (parse-algo-inline "Result:"))
+      (list 'algo-return (parse-algo-inline "return"))
+      (list 'algo-state (skip-to))
+      (list 'algo-to (parse-algo-keyword "to"))
+      (list 'algo-true (parse-algo-keyword "true"))
+      (list 'algo-while (make-algo-loop-handler "while" "end while"))
+      (list 'algo-xor (parse-algo-keyword "xor"))
       (list 'answer (count parse-plain-env 'env))
       (list 'answer* parse-plain-env*)
       (list 'assign drop)
@@ -609,6 +774,7 @@ first empty label"
       (list 'hugo-front identity)  ; Hugo extension (frontmatter)
       (list 'hugo-short parse-hugo-short)  ; Hugo extension (arbitrary shortcodes)
       (list 'image parse-image)
+      (list 'indent parse-algo-indent)
       (list 'itemize-arrow (change-to 'itemize))
       (list 'itemize-dot (change-to 'itemize))
       (list 'itemize keep)
@@ -632,7 +798,7 @@ first empty label"
       (list 'menu (parse-menu 0))
       (list 'mmx-code (code-block "mmx"))
       (list 'mmx parse-verbatim)
-      (list 'named-algorithm (count parse-named-alg 'alg))
+      (list 'named-algorithm (count (lambda (x) (if (hugo-extensions?) (parse-hugo-named-alg x) (parse-named-alg x))) 'alg))
       (list 'name keep)  ; TODO: html extension
       (list 'nbsp (change-to "&nbsp;"))
       (list 'no-break-here drop)
@@ -677,8 +843,8 @@ first empty label"
       (list 'solution (count parse-plain-env 'env))
       (list 'solution* parse-plain-env*)
       (list 'specific parse-specific)
-      (list 'specified-algorithm (count parse-specified-alg 'alg))
-      (list 'specified-algorithm* parse-specified-alg*)
+      (list 'specified-algorithm (count (lambda (x) (if (hugo-extensions?) (parse-hugo-specified-alg x) (parse-specified-alg x))) 'alg))
+      (list 'specified-algorithm* (lambda (x) (if (hugo-extensions?) (parse-hugo-specified-alg* x) (parse-specified-alg* x))))
       (list 'src-var (skip-to))
       (list 'strike-through (change-to 'strike)) ; non-standard extension
       (list 'strong keep)

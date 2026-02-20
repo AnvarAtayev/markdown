@@ -357,7 +357,8 @@
 (define md-style-tag-list '(em strong tt strike underline))
 (define md-style-drop-tag-list
   '(marginal-note marginal-note* footnote footnote* label item
-    equation equation* eqnarray eqnarray* math folded tm-env))
+    equation equation* eqnarray eqnarray* math folded tm-env tm-algorithm
+    algo-block algo-indent algo-line))
 (define md-stylable-tag-list '(document itemize enumerate theorem ))  ;FIXME
 
 (define (add-style-to st x)
@@ -606,6 +607,75 @@
       ;; Vanilla fallback (shouldn't normally reach here)
       (serialize-markdown* (sixth x))))
 
+(define (md-algo-block x)
+  "Serializes (algo-block header closing body).
+   Hugo: wraps body in {{% indent %}} shortcode. Vanilla: 2-space indent."
+  (let* ((header (serialize-markdown* (second x)))
+         (closing (third x))
+         (body (fourth x))
+         (closing-str (if closing (serialize-markdown* closing) #f)))
+    (if (hugo-extensions?)
+        (let ((body-str (serialize-markdown* body)))
+          (string-append header "\n"
+                         "{{% indent %}}\n"
+                         body-str "\n"
+                         "{{% /indent %}}"
+                         (if closing-str
+                             (string-append "\n" closing-str)
+                             "")))
+        (let ((body-str (with-md-globals 'indent (indent-increment 2)
+                          (with-md-globals 'first-indent (md-get 'indent)
+                            (serialize-markdown* body)))))
+          (string-append header "\n"
+                         body-str
+                         (if closing-str
+                             (string-append "\n" closing-str)
+                             ""))))))
+
+(define (md-algo-line x)
+  "Serializes (algo-line content)."
+  (serialize-markdown* (second x)))
+
+(define (md-algo-indent x)
+  "Serializes (algo-indent body).
+   Hugo: {{% indent %}} shortcode. Vanilla: 2-space indent."
+  (let ((body (second x)))
+    (if (hugo-extensions?)
+        (let ((body-str (serialize-markdown* body)))
+          (string-append "{{% indent %}}\n"
+                         body-str "\n"
+                         "{{% /indent %}}"))
+        (with-md-globals 'indent (indent-increment 2)
+          (with-md-globals 'first-indent (md-get 'indent)
+            (serialize-markdown* body))))))
+
+(define (md-tm-algorithm x)
+  "Hugo extension: algorithm environment as {{% algorithm %}} shortcode.
+   Intermediate form: (tm-algorithm number-or-#f title-or-#f body)"
+  (if (hugo-extensions?)
+      (let* ((number (second x))
+             (title (third x))
+             (body (fourth x))
+             (title-str (if (and title (string? title)) title
+                            (if title (serialize-markdown* title) #f)))
+             (params (string-append
+                      (if number
+                          (string-append "number=" (string-quote number))
+                          "")
+                      (if (and title-str (not (string-null? title-str)))
+                          (string-append
+                           (if number " " "")
+                           "title=" (string-quote title-str))
+                          "")))
+             (content (serialize-markdown* body)))
+        (string-append "{{% algorithm"
+                       (if (string-null? params) "" (string-append " " params))
+                       " %}}\n"
+                       content "\n"
+                       "{{% /algorithm %}}"))
+      ;; Vanilla fallback
+      (serialize-markdown* (fourth x))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; dispatch
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -625,6 +695,9 @@
 (map (lambda (l) (apply (cut ahash-set! serialize-hash <> <>) l))
      (list
       (list 'abstract md-abstract)
+      (list 'algo-block md-algo-block)
+      (list 'algo-indent md-algo-indent)
+      (list 'algo-line md-algo-line)
       (list 'bibliography md-bibliography)  ; TfL extension
       (list 'big-figure
         (md-figure 'tmfigure '(marginal-caption . #t) '(class . "big-figure")))
@@ -684,6 +757,7 @@
       (list 'tabular md-tabular)
       (list 'tags md-hugo-tags)  ; Hugo extension (DEPRECATED)
       (list 'tm-env md-tm-env)  ; Hugo extension (theorem-like environments)
+      (list 'tm-algorithm md-tm-algorithm)  ; Hugo extension (algorithm environments)
       (list 'tmdoc-copyright md-tmdoc-copyright)
       (list 'todo md-todo)
       (list 'tt md-style)
